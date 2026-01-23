@@ -463,6 +463,7 @@ class DataParallelPPOActor(BasePPOActor):
                     dpo_is_teacher = model_inputs.get("dpo_is_teacher", None)
                     dpo_group_id = model_inputs.get("dpo_group_id", None)
                     dpo_ref_logprobs = model_inputs.get("dpo_ref_logprobs", None)
+                    dpo_config = model_inputs.get("dpo_config", None)
 
                     # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
                     # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
@@ -481,6 +482,7 @@ class DataParallelPPOActor(BasePPOActor):
                         dpo_is_teacher=dpo_is_teacher,
                         dpo_group_id=dpo_group_id,
                         dpo_ref_logprobs=dpo_ref_logprobs,
+                        dpo_config=dpo_config,
                     )
                     micro_batch_metrics.update(pg_metrics)
 
