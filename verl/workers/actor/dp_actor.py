@@ -458,6 +458,12 @@ class DataParallelPPOActor(BasePPOActor):
                     # Weights are computed centrally in trainer and added when algorithm.rollout_is=True
                     rollout_is_weights = model_inputs.get("rollout_is_weights", None)
 
+                    # Extract DPO-specific tensors if present (for ppo_with_dpo loss mode)
+                    # These are added by DPOActorWrapper and survive micro-batching
+                    dpo_is_teacher = model_inputs.get("dpo_is_teacher", None)
+                    dpo_group_id = model_inputs.get("dpo_group_id", None)
+                    dpo_ref_logprobs = model_inputs.get("dpo_ref_logprobs", None)
+
                     # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
                     # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
                     policy_loss_fn = get_policy_loss_fn(loss_mode)
@@ -471,6 +477,10 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_agg_mode=loss_agg_mode,
                         config=self.config,
                         rollout_is_weights=rollout_is_weights,
+                        # DPO tensors (None if not using ppo_with_dpo mode)
+                        dpo_is_teacher=dpo_is_teacher,
+                        dpo_group_id=dpo_group_id,
+                        dpo_ref_logprobs=dpo_ref_logprobs,
                     )
                     micro_batch_metrics.update(pg_metrics)
 
