@@ -54,11 +54,15 @@ from torch.distributed._tensor import Placement, Shard
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     GenerationConfig,
     PretrainedConfig,
 )
+try:
+    from transformers import AutoModelForVision2Seq
+except ImportError:
+    AutoModelForVision2Seq = AutoModelForImageTextToText
 
 try:
     # for torch 2.5+

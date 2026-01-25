@@ -23,10 +23,14 @@ from accelerate import init_empty_weights
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     GenerationConfig,
 )
+try:
+    from transformers import AutoModelForVision2Seq
+except ImportError:
+    AutoModelForVision2Seq = AutoModelForImageTextToText
 
 from verl.utils import hf_processor, hf_tokenizer
 

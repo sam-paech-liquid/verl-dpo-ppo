@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Compatibility shim for transformers 5.0+ (AutoModelForVision2Seq was removed)
+import transformers
+if not hasattr(transformers, 'AutoModelForVision2Seq'):
+    transformers.AutoModelForVision2Seq = transformers.AutoModelForImageTextToText
+
 import importlib
 import logging
 import os
