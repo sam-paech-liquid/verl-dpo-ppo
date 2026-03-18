@@ -376,6 +376,8 @@ class vLLMRollout(BaseRollout):
                 "temperature": self.config.val_kwargs.temperature,
                 "n": 1,  # if validate, already repeat in ray_trainer
             }
+        elif "temperature" in prompts.meta_info:
+            kwargs = {"temperature": prompts.meta_info["temperature"]}
 
         lora_requests = None
         if self.lora_kwargs:
