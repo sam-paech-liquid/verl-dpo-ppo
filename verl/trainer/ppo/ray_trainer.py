@@ -1229,6 +1229,47 @@ class RayPPOTrainer:
             critic_output = self.critic_wg.update_critic(batch)
         return critic_output
 
+    def _sample_random_rollout_temperature(self, global_steps: int) -> dict[str, float | str] | None:
+        """Optionally sample a per-batch rollout temperature using the legacy liquid schedule."""
+        rt_cfg = self.config.trainer.get("random_temperature")
+        if rt_cfg is None:
+            return None
+
+        beta_alpha = float(rt_cfg.get("beta_alpha", 0))
+        if beta_alpha <= 0:
+            return None
+
+        temp_floor = float(rt_cfg.get("floor", 0.1))
+        schedule_cfg = rt_cfg.get("schedule", {})
+        fixed_until = float(schedule_cfg.get("fixed_until", 0.0))
+        fixed_temp = float(schedule_cfg.get("fixed_temp", temp_floor))
+        ramp_until = float(schedule_cfg.get("ramp_until", fixed_until))
+
+        progress = 0.0
+        if self.total_training_steps > 1:
+            progress = (int(global_steps) - 1) / (self.total_training_steps - 1)
+            progress = min(max(progress, 0.0), 1.0)
+
+        target_temp = max(float(np.random.beta(beta_alpha, 1)), temp_floor)
+
+        phase = "target"
+        if progress < fixed_until:
+            sampled_temp = fixed_temp
+            phase = "fixed"
+        elif progress < ramp_until and ramp_until > fixed_until:
+            mix = (progress - fixed_until) / (ramp_until - fixed_until)
+            sampled_temp = (1.0 - mix) * fixed_temp + mix * target_temp
+            phase = "ramp"
+        else:
+            sampled_temp = target_temp
+
+        return {
+            "sampled_temperature": float(sampled_temp),
+            "target_temperature": float(target_temp),
+            "temperature_progress": float(progress),
+            "temperature_phase": phase,
+        }
+
     def fit(self):
         """
         The training loop of PPO.
@@ -1299,7 +1340,11 @@ class RayPPOTrainer:
                         else curr_step_profile
                     )
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
-                batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
+                rollout_temperature_info = self._sample_random_rollout_temperature(self.global_steps)
+                if rollout_temperature_info is None:
+                    batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
+                else:
+                    batch.meta_info["temperature"] = rollout_temperature_info["sampled_temperature"]
 
                 # add uid to batch
                 batch.non_tensor_batch["uid"] = np.array(
@@ -1310,6 +1355,7 @@ class RayPPOTrainer:
 
                 # pass global_steps to trace
                 gen_batch.meta_info["global_steps"] = self.global_steps
+                gen_batch.meta_info["temperature"] = batch.meta_info["temperature"]
                 gen_batch_output = gen_batch.repeat(
                     repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True
                 )
@@ -1324,6 +1370,23 @@ class RayPPOTrainer:
                         self.checkpoint_manager.sleep_replicas()
                         if curr_step_profile:
                             self.async_rollout_manager.stop_profile()
+
+                        if rollout_temperature_info is not None:
+                            gen_batch_output.meta_info.update(rollout_temperature_info)
+
+                        sampled_temperature = gen_batch_output.meta_info.pop("sampled_temperature", None)
+                        if sampled_temperature is not None:
+                            metrics["rollout/temperature"] = float(sampled_temperature)
+                        temperature_progress = gen_batch_output.meta_info.pop("temperature_progress", None)
+                        if temperature_progress is not None:
+                            metrics["rollout/temperature_progress"] = float(temperature_progress)
+                        temperature_phase = gen_batch_output.meta_info.pop("temperature_phase", None)
+                        if temperature_phase is not None:
+                            phase_map = {"fixed": 0.0, "ramp": 1.0, "target": 2.0}
+                            metrics["rollout/temperature_phase"] = phase_map.get(temperature_phase, -1.0)
+                        target_temperature = gen_batch_output.meta_info.pop("target_temperature", None)
+                        if target_temperature is not None:
+                            metrics["rollout/target_temperature"] = float(target_temperature)
 
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
