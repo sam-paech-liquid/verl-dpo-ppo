@@ -1106,10 +1106,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         adapter_ctx = self.actor.actor_module.disable_adapter() if is_lora else nullcontext()
         # we should always recompute old_log_probs when it is HybridEngine
         config_source = self.config.ref if is_lora else self.config.rollout
+        rollout_temperature = data.meta_info.get("temperature", self.config.rollout.temperature)
         data.meta_info["micro_batch_size"] = config_source.log_prob_micro_batch_size_per_gpu
         data.meta_info["max_token_len"] = config_source.log_prob_max_token_len_per_gpu
         data.meta_info["use_dynamic_bsz"] = config_source.log_prob_use_dynamic_bsz
-        data.meta_info["temperature"] = self.config.rollout.temperature
+        data.meta_info["temperature"] = rollout_temperature
         data.meta_info.setdefault("pad_token_id", self.tokenizer.pad_token_id)
         # perform recompute log_prob
         calculate_entropy = not is_lora
@@ -1126,7 +1127,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 tensors["sum_pi_squared"] = outputs["sum_pi_squared"]
             output = DataProto.from_dict(
                 tensors=tensors,
-                meta_info={"temperature": self.config.rollout.temperature},
+                meta_info={"temperature": rollout_temperature},
             )
 
         output = output.to("cpu")
@@ -1154,8 +1155,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # otherwise, the class have a standalone ref model
 
         micro_batch_size = self.config.ref.log_prob_micro_batch_size_per_gpu
+        rollout_temperature = data.meta_info.get("temperature", self.config.rollout.temperature)
         data.meta_info["micro_batch_size"] = micro_batch_size
-        data.meta_info["temperature"] = self.config.rollout.temperature
+        data.meta_info["temperature"] = rollout_temperature
         data.meta_info["max_token_len"] = self.config.ref.log_prob_max_token_len_per_gpu
         data.meta_info["use_dynamic_bsz"] = self.config.ref.log_prob_use_dynamic_bsz
         data.meta_info.setdefault("pad_token_id", self.tokenizer.pad_token_id)
