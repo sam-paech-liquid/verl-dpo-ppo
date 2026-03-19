@@ -14,6 +14,7 @@
 # limitations under the License.
 import asyncio
 import dataclasses
+import importlib.metadata
 import json
 import logging
 import os
@@ -54,6 +55,23 @@ logger = logging.getLogger(__file__)
 logger.setLevel(logging.INFO)
 
 visible_devices_keyword = get_visible_devices_keyword()
+
+
+def _get_sglang_version() -> version.Version | None:
+    raw_version = getattr(sglang, "__version__", None)
+    if raw_version:
+        return version.parse(raw_version)
+
+    for package_name in ("sglang", "sglang-srt"):
+        try:
+            return version.parse(importlib.metadata.version(package_name))
+        except importlib.metadata.PackageNotFoundError:
+            continue
+
+    return None
+
+
+SGLANG_VERSION = _get_sglang_version()
 
 
 class SGLangHttpServer:
@@ -237,8 +255,10 @@ class SGLangHttpServer:
         # mtp
         if self.config.mtp.enable and self.config.mtp.enable_rollout:
             # Enable weights CPU backup for sglang >= 0.5.6
-            if sglang.__version__ < "0.5.6":
-                raise ValueError(f"sglang version {sglang.__version__} is not supported for MTP rollout")
+            if SGLANG_VERSION is None:
+                raise ValueError("Unable to determine sglang version; MTP rollout requires sglang>=0.5.6")
+            if SGLANG_VERSION < version.parse("0.5.6"):
+                raise ValueError(f"sglang version {SGLANG_VERSION} is not supported for MTP rollout")
 
             args["speculative_algorithm"] = self.config.mtp.speculative_algorithm
             args["speculative_num_steps"] = self.config.mtp.speculative_num_steps
@@ -253,7 +273,7 @@ class SGLangHttpServer:
         sglang.srt.entrypoints.engine._set_envs_and_config = _set_envs_and_config
         os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
         server_args = ServerArgs(**args)
-        if version.parse(sglang.__version__) >= version.parse("0.5.7"):
+        if SGLANG_VERSION is not None and SGLANG_VERSION >= version.parse("0.5.7"):
             self.tokenizer_manager, self.template_manager, self.scheduler_info, *_ = _launch_subprocesses(
                 server_args=server_args,
                 init_tokenizer_manager_func=sglang.srt.entrypoints.engine.init_tokenizer_manager,
