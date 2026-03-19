@@ -474,7 +474,7 @@ class AgentLoopWorker:
         """
         config = self.rollout_config
         sampling_params = dict(
-            temperature=config.temperature,
+            temperature=batch.meta_info.get("temperature", config.temperature),
             top_p=config.top_p,
             top_k=config.top_k,
             repetition_penalty=1.0,
@@ -486,6 +486,13 @@ class AgentLoopWorker:
             sampling_params["top_p"] = config.val_kwargs.top_p
             sampling_params["top_k"] = config.val_kwargs.top_k
             sampling_params["temperature"] = config.val_kwargs.temperature
+
+        logger.info(
+            "[rollout_temperature] validate=%s temp=%s batch_size=%s",
+            batch.meta_info.get("validate", False),
+            sampling_params["temperature"],
+            len(batch),
+        )
 
         # by default, we assume it's a single turn agent
         if "agent_name" not in batch.non_tensor_batch:
