@@ -376,8 +376,16 @@ class vLLMRollout(BaseRollout):
                 "temperature": self.config.val_kwargs.temperature,
                 "n": 1,  # if validate, already repeat in ray_trainer
             }
+            print(
+                "[rollout_temperature] "
+                f"validate=True temp={kwargs['temperature']} batch_size={batch_size}"
+            )
         elif "temperature" in prompts.meta_info:
             kwargs = {"temperature": prompts.meta_info["temperature"]}
+            print(
+                "[rollout_temperature] "
+                f"validate=False temp={kwargs['temperature']} batch_size={batch_size}"
+            )
 
         lora_requests = None
         if self.lora_kwargs:
