@@ -1056,6 +1056,17 @@ class RayPPOTrainer:
                         else:
                             gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch_output)
 
+                        sampled_temperature = gen_batch_output.meta_info.pop("sampled_temperature", None)
+                        if sampled_temperature is not None:
+                            metrics["rollout/temperature"] = float(sampled_temperature)
+                        temperature_progress = gen_batch_output.meta_info.pop("temperature_progress", None)
+                        if temperature_progress is not None:
+                            metrics["rollout/temperature_progress"] = float(temperature_progress)
+                        temperature_phase = gen_batch_output.meta_info.pop("temperature_phase", None)
+                        if temperature_phase is not None:
+                            phase_map = {"fixed": 0.0, "ramp": 1.0, "target": 2.0}
+                            metrics["rollout/temperature_phase"] = phase_map.get(temperature_phase, -1.0)
+
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
 
