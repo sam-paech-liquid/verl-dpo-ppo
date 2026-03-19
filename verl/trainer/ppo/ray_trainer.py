@@ -1279,15 +1279,20 @@ class RayPPOTrainer:
         if ts_cfg is None:
             return None
 
-        points_json = ts_cfg.get("points_json")
-        if points_json is None:
+        points_config = ts_cfg.get("points_json")
+        if points_config is None:
             return None
 
         if not hasattr(self, "_temperature_schedule_points_cache"):
-            try:
-                raw_points = json.loads(points_json)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"trainer.temperature_schedule.points_json must be valid JSON: {points_json}") from exc
+            if isinstance(points_config, (str, bytes, bytearray)):
+                try:
+                    raw_points = json.loads(points_config)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"trainer.temperature_schedule.points_json must be valid JSON: {points_config}"
+                    ) from exc
+            else:
+                raw_points = OmegaConf.to_container(points_config, resolve=True)
 
             if not isinstance(raw_points, list) or len(raw_points) < 2:
                 raise ValueError("trainer.temperature_schedule.points_json must contain at least two [progress, temp] points")
