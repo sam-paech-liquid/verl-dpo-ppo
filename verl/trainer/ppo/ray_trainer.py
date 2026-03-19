@@ -1229,6 +1229,13 @@ class RayPPOTrainer:
             critic_output = self.critic_wg.update_critic(batch)
         return critic_output
 
+    def _get_rollout_temperature_progress(self, global_steps: int) -> float:
+        progress = 0.0
+        if self.total_training_steps > 1:
+            progress = (int(global_steps) - 1) / (self.total_training_steps - 1)
+            progress = min(max(progress, 0.0), 1.0)
+        return float(progress)
+
     def _sample_random_rollout_temperature(self, global_steps: int) -> dict[str, float | str] | None:
         """Optionally sample a per-batch rollout temperature using the legacy liquid schedule."""
         rt_cfg = self.config.trainer.get("random_temperature")
@@ -1245,10 +1252,7 @@ class RayPPOTrainer:
         fixed_temp = float(schedule_cfg.get("fixed_temp", temp_floor))
         ramp_until = float(schedule_cfg.get("ramp_until", fixed_until))
 
-        progress = 0.0
-        if self.total_training_steps > 1:
-            progress = (int(global_steps) - 1) / (self.total_training_steps - 1)
-            progress = min(max(progress, 0.0), 1.0)
+        progress = self._get_rollout_temperature_progress(global_steps)
 
         target_temp = max(float(np.random.beta(beta_alpha, 1)), temp_floor)
 
@@ -1269,6 +1273,114 @@ class RayPPOTrainer:
             "temperature_progress": float(progress),
             "temperature_phase": phase,
         }
+
+    def _get_temperature_schedule_points(self) -> list[tuple[float, float]] | None:
+        ts_cfg = self.config.trainer.get("temperature_schedule")
+        if ts_cfg is None:
+            return None
+
+        points_json = ts_cfg.get("points_json")
+        if points_json is None:
+            return None
+
+        if not hasattr(self, "_temperature_schedule_points_cache"):
+            try:
+                raw_points = json.loads(points_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"trainer.temperature_schedule.points_json must be valid JSON: {points_json}") from exc
+
+            if not isinstance(raw_points, list) or len(raw_points) < 2:
+                raise ValueError("trainer.temperature_schedule.points_json must contain at least two [progress, temp] points")
+
+            parsed_points: list[tuple[float, float]] = []
+            prev_progress = None
+            for idx, point in enumerate(raw_points):
+                if not isinstance(point, (list, tuple)) or len(point) != 2:
+                    raise ValueError(
+                        "trainer.temperature_schedule.points_json entries must be [progress, temperature] pairs"
+                    )
+
+                point_progress = float(point[0])
+                point_temperature = float(point[1])
+                if not 0.0 <= point_progress <= 1.0:
+                    raise ValueError(
+                        f"trainer.temperature_schedule.points_json progress must be in [0, 1], got {point_progress}"
+                    )
+                if point_temperature <= 0.0:
+                    raise ValueError(
+                        f"trainer.temperature_schedule.points_json temperature must be > 0, got {point_temperature}"
+                    )
+                if prev_progress is not None and point_progress < prev_progress:
+                    raise ValueError("trainer.temperature_schedule.points_json progress values must be sorted")
+
+                parsed_points.append((point_progress, point_temperature))
+                prev_progress = point_progress
+
+            self._temperature_schedule_points_cache = parsed_points
+
+        return self._temperature_schedule_points_cache
+
+    def _sample_scheduled_rollout_temperature(self, global_steps: int) -> dict[str, float | str] | None:
+        points = self._get_temperature_schedule_points()
+        if points is None:
+            return None
+
+        ts_cfg = self.config.trainer.get("temperature_schedule")
+        interpolation = str(ts_cfg.get("interpolation", "smoothstep")).lower()
+        if interpolation not in {"linear", "smoothstep"}:
+            raise ValueError(
+                f"trainer.temperature_schedule.interpolation must be 'linear' or 'smoothstep', got {interpolation}"
+            )
+
+        progress = self._get_rollout_temperature_progress(global_steps)
+
+        if progress <= points[0][0]:
+            sampled_temp = points[0][1]
+            segment_idx = 0
+            phase = "scheduled_hold"
+        elif progress >= points[-1][0]:
+            sampled_temp = points[-1][1]
+            segment_idx = len(points) - 2
+            phase = "scheduled_hold"
+        else:
+            segment_idx = 0
+            sampled_temp = points[-1][1]
+            phase = "scheduled_ramp"
+            for idx, ((start_progress, start_temp), (end_progress, end_temp)) in enumerate(zip(points, points[1:])):
+                if start_progress <= progress <= end_progress:
+                    segment_idx = idx
+                    if end_progress <= start_progress:
+                        mix = 1.0
+                    else:
+                        mix = (progress - start_progress) / (end_progress - start_progress)
+                    if interpolation == "smoothstep":
+                        mix = mix * mix * (3.0 - 2.0 * mix)
+                    sampled_temp = (1.0 - mix) * start_temp + mix * end_temp
+                    break
+
+        return {
+            "sampled_temperature": float(sampled_temp),
+            "target_temperature": float(sampled_temp),
+            "temperature_progress": float(progress),
+            "temperature_phase": phase,
+            "temperature_segment": float(segment_idx),
+        }
+
+    def _get_rollout_temperature_info(self, global_steps: int) -> dict[str, float | str] | None:
+        random_cfg = self.config.trainer.get("random_temperature")
+        schedule_cfg = self.config.trainer.get("temperature_schedule")
+
+        random_enabled = random_cfg is not None and float(random_cfg.get("beta_alpha", 0)) > 0
+        schedule_points = None if schedule_cfg is None else schedule_cfg.get("points_json")
+        schedule_enabled = schedule_points is not None and str(schedule_points).strip() not in {"", "[]"}
+
+        if random_enabled and schedule_enabled:
+            raise ValueError("trainer.random_temperature and trainer.temperature_schedule are mutually exclusive")
+        if random_enabled:
+            return self._sample_random_rollout_temperature(global_steps)
+        if schedule_enabled:
+            return self._sample_scheduled_rollout_temperature(global_steps)
+        return None
 
     def fit(self):
         """
@@ -1340,7 +1452,7 @@ class RayPPOTrainer:
                         else curr_step_profile
                     )
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
-                rollout_temperature_info = self._sample_random_rollout_temperature(self.global_steps)
+                rollout_temperature_info = self._get_rollout_temperature_info(self.global_steps)
                 if rollout_temperature_info is None:
                     batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
                 else:
@@ -1382,11 +1494,20 @@ class RayPPOTrainer:
                             metrics["rollout/temperature_progress"] = float(temperature_progress)
                         temperature_phase = gen_batch_output.meta_info.pop("temperature_phase", None)
                         if temperature_phase is not None:
-                            phase_map = {"fixed": 0.0, "ramp": 1.0, "target": 2.0}
+                            phase_map = {
+                                "fixed": 0.0,
+                                "ramp": 1.0,
+                                "target": 2.0,
+                                "scheduled_hold": 3.0,
+                                "scheduled_ramp": 4.0,
+                            }
                             metrics["rollout/temperature_phase"] = phase_map.get(temperature_phase, -1.0)
                         target_temperature = gen_batch_output.meta_info.pop("target_temperature", None)
                         if target_temperature is not None:
                             metrics["rollout/target_temperature"] = float(target_temperature)
+                        temperature_segment = gen_batch_output.meta_info.pop("temperature_segment", None)
+                        if temperature_segment is not None:
+                            metrics["rollout/temperature_segment"] = float(temperature_segment)
 
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
