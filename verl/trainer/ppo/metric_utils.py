@@ -220,6 +220,10 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         doomloop = np.asarray(batch.non_tensor_batch["doomloop"], dtype=np.float32)
         metrics["doomloop/ratio"] = float(np.mean(doomloop))
 
+    if "verifier_error" in batch.non_tensor_batch:
+        verifier_error = np.asarray(batch.non_tensor_batch["verifier_error"], dtype=np.float32)
+        metrics["verifier_error/ratio"] = float(np.mean(verifier_error))
+
     if "tool_call_counts" in batch.non_tensor_batch:
         tool_call_counts = batch.non_tensor_batch["tool_call_counts"]
         metrics["tool_call_counts/min"] = tool_call_counts.min()
