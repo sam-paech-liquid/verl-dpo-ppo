@@ -49,6 +49,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_variance_proxy_metrics,
     process_validation_metrics,
 )
+from verl.trainer.ppo.loop_masking import apply_loop_tail_mask
 from verl.trainer.ppo.reward import extract_reward
 from verl.trainer.ppo.utils import Role, WorkerType, need_critic, need_reference_policy, need_reward_model
 from verl.utils import tensordict_utils as tu
@@ -1577,6 +1578,10 @@ class RayPPOTrainer:
                         reward_tensor, reward_extra_infos_dict = extract_reward(batch)
 
                     # Operating Mode Selection:
+                    loop_mask_cfg = self.config.trainer.get("loop_masking")
+                    if loop_mask_cfg is not None and bool(loop_mask_cfg.get("enable", False)):
+                        metrics.update(apply_loop_tail_mask(batch, OmegaConf.to_container(loop_mask_cfg, resolve=True)))
+
                     # - Bypass mode: Sets old_log_probs = rollout_log_probs (2 policies: π_rollout, π_θ)
                     # - Decoupled mode: Recomputes old_log_probs as proximal anchor (3 policies: π_rollout, π_old, π_θ)
                     #   Note: π_old computed once per data batch, serves as stable reference during mini-batch updates
